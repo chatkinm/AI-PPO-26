@@ -72,8 +72,12 @@
 * Пути к папкам `storage/uploads` и `storage/output`.
 
 ### `backend/app/models/`
-* **`structure.py`**: Описывает дерево проекта. `ProjectStructure` ⟶ список `Module` ⟶ список `Screen` ⟶ список `ScreenElement`. Содержит флаг `requires_clarification` и номер строки из сметы.
-* **`analysis.py`**: `AnalysisReport` ⟶ список согласованных требований `RequirementItem`, список противоречий `Inconsistency` (с цитатами источников А и Б и готовым вопросом клиенту), список белых пятен `missing_critical_topics`.
+* **`structure.py`**: Описывает дерево проекта: `ProjectStructure` ⟶ список `Module` ⟶ список `Screen` ⟶ список `ScreenElement`. Содержит флаг `requires_clarification` и номер строки из сметы.
+* **`analysis.py`**: Pydantic-схемы комплексного аудита требований:
+  - `ChecklistAuditItem`: элементы аудита по 20 блокам чек-листа полноты информации Xpage (`block_number`, `block_name`, `status`, `risk_level`, `points_evaluated`, `findings`, `risk_description`, `recommendation_or_question`);
+  - `Inconsistency`: детальное противоречие (`id`, `block_number`, `topic`, `source_a`, `source_b`, `conflict_explanation`, `clarifying_question`, `severity`, `impact_area`, `status`);
+  - `RequirementItem`: подтвержденное техническое/бизнес требование (`id`, `category`, `text`, `source`, `status`);
+  - `AnalysisReport`: итоговый отчет (`readiness_score`, `checklist_audit`, `inconsistencies`, `confirmed_requirements`, `missing_critical_topics`).
 * **`tz.py`**: Схема разделов ТЗ (Глоссарий, Цели, Архитектура, Описание экранов, Интеграции).
 
 ### `backend/app/services/`

@@ -13,6 +13,8 @@ function App() {
   const [structure, setStructure] = useState(null);
   const [transcripts, setTranscripts] = useState([]);
   const [analysisReport, setAnalysisReport] = useState(null);
+  const [analysisActiveTab, setAnalysisActiveTab] = useState("checklist"); // "checklist", "inconsistencies", "requirements", "gaps"
+  const [checklistFilter, setChecklistFilter] = useState("all"); // "all", "critical", "high", "contradiction", "gap", "confirmed"
   const [figjamUrl, setFigjamUrl] = useState("");
   const [figjamData, setFigjamData] = useState(null);
   const [tzGenerated, setTzGenerated] = useState(false);
@@ -228,24 +230,60 @@ function App() {
   };
 
   const handleExportQuestions = () => {
-    if (!analysisReport || !analysisReport.inconsistencies) return;
-    let content = `# Опросник для клиента по итогам предпроектного обследования (ППО)\nПроект: ${activeProject?.name}\nДата: ${new Date().toLocaleDateString()}\n\n`;
-    content += `## Выявленные разногласия и требующие решения вопросы:\n\n`;
-    analysisReport.inconsistencies.forEach((inc, idx) => {
-      content += `### Вопрос ${idx + 1}: ${inc.topic}\n`;
-      content += `* Контекст / В чем конфликт: ${inc.conflict_explanation}\n`;
-      content += `* Вопрос для Заказчика: **${inc.clarifying_question}**\n\n`;
+    if (!analysisReport) return;
+    let md = `# Аудит требований ППО и опросник для клиента по стандарту Xpage\n`;
+    md += `**Проект:** ${activeProject?.name}\n`;
+    md += `**Индекс готовности требований (DoR):** ${analysisReport.readiness_score || 82}%\n`;
+    md += `**Дата проведения аудита:** ${new Date().toLocaleDateString()}\n\n`;
+    md += `---\n\n`;
+
+    md += `## 1. Реестр выявленных противоречий и вопросов клиенту (${analysisReport.inconsistencies?.length || 0})\n\n`;
+    analysisReport.inconsistencies?.forEach((inc, idx) => {
+      md += `### ${idx + 1}. ${inc.topic}\n`;
+      if (inc.block_number) md += `* **Связанный блок чек-листа:** Блок ${inc.block_number}\n`;
+      if (inc.impact_area) md += `* **Зона влияния:** ${inc.impact_area}\n`;
+      md += `* **Критичность:** ${inc.severity === 'critical' ? '🔴 Критическая' : inc.severity === 'high' ? '🟡 Высокая' : '🔵 Средняя'}\n`;
+      md += `* **Источник А:** ${inc.source_a}\n`;
+      md += `* **Источник Б:** ${inc.source_b}\n`;
+      md += `* **Суть конфликта:** ${inc.conflict_explanation}\n`;
+      md += `* **Вопрос для Заказчика:** **«${inc.clarifying_question}»**\n\n`;
     });
 
-    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    if (analysisReport.checklist_audit && analysisReport.checklist_audit.length > 0) {
+      md += `## 2. Матрица аудита по 20 блокам чек-листа полноты информации Xpage\n\n`;
+      md += `| № | Блок чек-листа | Статус | Риск | Что зафиксировано | Описание риска | Рекомендация / Вопрос |\n`;
+      md += `|---|---|:---:|:---:|---|---|---|\n`;
+      analysisReport.checklist_audit.forEach((item) => {
+        const stBadge = item.status === 'confirmed' ? '✅ Согласовано' : item.status === 'contradiction' ? '⚠️ Противоречие' : '🔍 Белое пятно';
+        const riskBadge = item.risk_level === 'critical' ? '🔴 Критический' : item.risk_level === 'high' ? '🟡 Высокий' : '🔵 Средний';
+        md += `| ${item.block_number} | **${item.block_name}** | ${stBadge} | ${riskBadge} | ${item.findings || '-'} | ${item.risk_description || '-'} | ${item.recommendation_or_question || '-'} |\n`;
+      });
+      md += `\n\n`;
+    }
+
+    if (analysisReport.missing_critical_topics && analysisReport.missing_critical_topics.length > 0) {
+      md += `## 3. Критические белые пятна (Gaps)\n\n`;
+      analysisReport.missing_critical_topics.forEach((gap, idx) => {
+        md += `${idx + 1}. ⚠️ ${gap}\n`;
+      });
+      md += `\n`;
+    }
+
+    if (analysisReport.confirmed_requirements && analysisReport.confirmed_requirements.length > 0) {
+      md += `## 4. Согласованные технические требования (${analysisReport.confirmed_requirements.length})\n\n`;
+      analysisReport.confirmed_requirements.forEach((req) => {
+        md += `* **[${req.id}]** (${req.category || 'Общее'}): ${req.text} *(Источник: ${req.source})*\n`;
+      });
+    }
+
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Опросник_клиенту_${activeProject?.name}.md`;
+    a.download = `Аудит_ППО_и_опросник_${activeProject?.name}.md`;
     a.click();
-    showToast("Опросник выгружен в формате Markdown!");
+    showToast("Полный опросник и матрица аудита выгружены в Markdown!");
   };
-
   // --- STEP 3: FIGJAM ---
   const handleSyncFigjam = async () => {
     if (!activeProject || !figjamUrl) return;
@@ -689,8 +727,10 @@ function App() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-2xl font-bold text-white">Этап 2: База знаний созвонов и выявление противоречий</h1>
-                <p className="text-sm text-slate-400">Загрузите расшифровки встреч (.docx) или аудио. AI сопоставит их со сметой и сформирует вопросы.</p>
+                <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <span>Этап 2: Аудит требований и матрица полноты информации Xpage</span>
+                </h1>
+                <p className="text-sm text-slate-400">Семантический кросс-анализ расшифровок созвонов со сметой по 20 блокам чек-листа с рисками (🔴/🟡/🔵).</p>
               </div>
               <div className="flex gap-3">
                 <label className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-sm font-medium text-white cursor-pointer transition flex items-center gap-2">
@@ -720,85 +760,401 @@ function App() {
 
             {analysisReport ? (
               <div className="space-y-6">
-                {/* Readiness Banner */}
-                <div className="glass-card rounded-2xl p-6 border border-slate-800 flex items-center justify-between">
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold uppercase tracking-wider text-rose-400">Индекс полноты требований (DoR)</div>
-                    <div className="text-2xl font-black text-white">{analysisReport.readiness_score || 85}% готовности к разработке</div>
-                    <div className="text-xs text-slate-400">Выявлено {analysisReport.inconsistencies?.length || 0} вопросов, требующих утверждения клиента.</div>
+                {/* Readiness Banner with KPIs */}
+                <div className="glass-card rounded-2xl p-6 border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-rose-400">Индекс готовности требований (DoR)</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-mono">Стандарт Xpage</span>
+                    </div>
+                    <div className="text-2xl font-black text-white">{analysisReport.readiness_score || 82}% готовности к ТЗ и разработке</div>
+                    <div className="text-xs text-slate-400 flex items-center gap-3 flex-wrap">
+                      <span>Чек-лист: <strong className="text-white">{analysisReport.checklist_audit?.length || 20} блоков</strong></span>
+                      <span>•</span>
+                      <span>Противоречий: <strong className="text-rose-400">{analysisReport.inconsistencies?.length || 0}</strong></span>
+                      <span>•</span>
+                      <span>Согласовано: <strong className="text-emerald-400">{analysisReport.confirmed_requirements?.length || 0}</strong></span>
+                      <span>•</span>
+                      <span>Белых пятен: <strong className="text-amber-400">{analysisReport.missing_critical_topics?.length || 0}</strong></span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 shrink-0">
                     <button
                       onClick={handleExportQuestions}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold transition flex items-center gap-1.5"
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow-md"
                     >
-                      📥 Выгрузить опросник (.md)
+                      📥 Выгрузить опросник и матрицу (.md)
                     </button>
                     <button
                       onClick={() => setCurrentStep(3)}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition"
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow-lg shadow-emerald-600/20"
                     >
-                      Утвердить требования ⟶ Перейти к FigJam
+                      Утвердить требования ⟶ FigJam
                     </button>
                   </div>
                 </div>
 
-                {/* Inconsistencies Cards */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-rose-500"></span>
-                    Противоречия и вопросы клиенту ({analysisReport.inconsistencies?.length || 0})
-                  </h3>
+                {/* Stat summary pills */}
+                {(() => {
+                  const audit = analysisReport.checklist_audit || [];
+                  const critCount = audit.filter(a => a.risk_level === 'critical').length;
+                  const highCount = audit.filter(a => a.risk_level === 'high').length;
+                  const medCount = audit.filter(a => a.risk_level === 'medium').length;
+                  const contraCount = audit.filter(a => a.status === 'contradiction').length;
+                  const gapCount = audit.filter(a => a.status === 'gap').length;
+                  const confCount = audit.filter(a => a.status === 'confirmed').length;
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {analysisReport.inconsistencies?.map((inc, idx) => (
-                      <div key={idx} className="bg-slate-900 rounded-2xl p-5 border border-rose-900/40 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-rose-400 text-sm">{inc.topic}</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 uppercase font-mono">
-                            {inc.severity || "critical"}
+                  return (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                      <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 flex items-center gap-3">
+                        <span className="text-xl">📋</span>
+                        <div>
+                          <div className="text-xs text-slate-400">Всего блоков</div>
+                          <div className="text-sm font-bold text-white">{audit.length || 20}</div>
+                        </div>
+                      </div>
+                      <div className="bg-rose-950/20 p-3 rounded-xl border border-rose-900/40 flex items-center gap-3">
+                        <span className="text-xl">🔴</span>
+                        <div>
+                          <div className="text-xs text-rose-300">Крит. риски</div>
+                          <div className="text-sm font-bold text-rose-400">{critCount}</div>
+                        </div>
+                      </div>
+                      <div className="bg-amber-950/20 p-3 rounded-xl border border-amber-900/40 flex items-center gap-3">
+                        <span className="text-xl">🟡</span>
+                        <div>
+                          <div className="text-xs text-amber-300">Высокие риски</div>
+                          <div className="text-sm font-bold text-amber-400">{highCount}</div>
+                        </div>
+                      </div>
+                      <div className="bg-rose-950/15 p-3 rounded-xl border border-rose-900/30 flex items-center gap-3">
+                        <span className="text-xl">⚠️</span>
+                        <div>
+                          <div className="text-xs text-rose-300">Противоречия</div>
+                          <div className="text-sm font-bold text-rose-300">{contraCount || analysisReport.inconsistencies?.length || 0}</div>
+                        </div>
+                      </div>
+                      <div className="bg-amber-950/15 p-3 rounded-xl border border-amber-900/30 flex items-center gap-3">
+                        <span className="text-xl">🔍</span>
+                        <div>
+                          <div className="text-xs text-amber-300">Белые пятна</div>
+                          <div className="text-sm font-bold text-amber-300">{gapCount || analysisReport.missing_critical_topics?.length || 0}</div>
+                        </div>
+                      </div>
+                      <div className="bg-emerald-950/20 p-3 rounded-xl border border-emerald-900/40 flex items-center gap-3">
+                        <span className="text-xl">✅</span>
+                        <div>
+                          <div className="text-xs text-emerald-300">Согласовано</div>
+                          <div className="text-sm font-bold text-emerald-400">{confCount}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Step 2 Tabs Navigation */}
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                  <button
+                    onClick={() => setAnalysisActiveTab('checklist')}
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-2 ${
+                      analysisActiveTab === 'checklist'
+                        ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <span>📋 Матрица чек-листа (20 блоков)</span>
+                  </button>
+                  <button
+                    onClick={() => setAnalysisActiveTab('inconsistencies')}
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-2 ${
+                      analysisActiveTab === 'inconsistencies'
+                        ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <span>⚠️ Противоречия и вопросы клиенту ({analysisReport.inconsistencies?.length || 0})</span>
+                  </button>
+                  <button
+                    onClick={() => setAnalysisActiveTab('requirements')}
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-2 ${
+                      analysisActiveTab === 'requirements'
+                        ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <span>✅ Согласованные требования ({analysisReport.confirmed_requirements?.length || 0})</span>
+                  </button>
+                  <button
+                    onClick={() => setAnalysisActiveTab('gaps')}
+                    className={`px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-2 ${
+                      analysisActiveTab === 'gaps'
+                        ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    <span>🔍 Белые пятна / Gaps ({analysisReport.missing_critical_topics?.length || 0})</span>
+                  </button>
+                </div>
+
+                {/* TAB 1: CHECKLIST MATRIX (20 BLOCKS) */}
+                {analysisActiveTab === 'checklist' && (
+                  <div className="space-y-4">
+                    {/* Filters Toolbar */}
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="text-xs text-slate-400 font-medium">Фильтр по рискам и статусам:</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {[
+                          { id: 'all', label: 'Все 20 разделов' },
+                          { id: 'critical', label: '🔴 Критические' },
+                          { id: 'high', label: '🟡 Высокие' },
+                          { id: 'contradiction', label: '⚠️ Противоречия' },
+                          { id: 'gap', label: '🔍 Белые пятна' },
+                          { id: 'confirmed', label: '✅ Согласовано' }
+                        ].map((btn) => (
+                          <button
+                            key={btn.id}
+                            onClick={() => setChecklistFilter(btn.id)}
+                            className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                              checklistFilter === btn.id
+                                ? 'bg-slate-700 text-white border border-slate-600'
+                                : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                            }`}
+                          >
+                            {btn.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Checklist Blocks List */}
+                    <div className="space-y-3">
+                      {(analysisReport.checklist_audit || [])
+                        .filter((item) => {
+                          if (checklistFilter === 'all') return true;
+                          if (checklistFilter === 'critical') return item.risk_level === 'critical';
+                          if (checklistFilter === 'high') return item.risk_level === 'high';
+                          if (checklistFilter === 'contradiction') return item.status === 'contradiction';
+                          if (checklistFilter === 'gap') return item.status === 'gap';
+                          if (checklistFilter === 'confirmed') return item.status === 'confirmed';
+                          return true;
+                        })
+                        .map((item, idx) => {
+                          const isContradiction = item.status === 'contradiction';
+                          const isGap = item.status === 'gap';
+                          const isCrit = item.risk_level === 'critical';
+                          const isHigh = item.risk_level === 'high';
+
+                          return (
+                            <div 
+                              key={idx}
+                              className={`rounded-2xl p-5 border transition space-y-3.5 ${
+                                isContradiction 
+                                  ? 'bg-rose-950/15 border-rose-900/40 hover:border-rose-700/60' 
+                                  : isGap 
+                                  ? 'bg-amber-950/15 border-amber-900/40 hover:border-amber-700/60' 
+                                  : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                                      БЛОК {item.block_number}
+                                    </span>
+                                    <h4 className="text-sm font-bold text-white">{item.block_name}</h4>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {/* Status badge */}
+                                  <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-semibold border ${
+                                    isContradiction
+                                      ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                      : isGap
+                                      ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                      : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                  }`}>
+                                    {isContradiction ? '⚠️ Противоречие' : isGap ? '🔍 Белое пятно' : '✅ Согласовано'}
+                                  </span>
+
+                                  {/* Risk badge */}
+                                  <span className={`text-[11px] px-2 py-0.5 rounded-md font-semibold border ${
+                                    isCrit
+                                      ? 'bg-rose-950/50 text-rose-400 border-rose-800/60'
+                                      : isHigh
+                                      ? 'bg-amber-950/50 text-amber-400 border-amber-800/60'
+                                      : 'bg-sky-950/50 text-sky-400 border-sky-800/60'
+                                  }`}>
+                                    {isCrit ? '🔴 Крит. риск' : isHigh ? '🟡 Высокий риск' : '🔵 Средний риск'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Evaluated Points Pills */}
+                              {item.points_evaluated && item.points_evaluated.length > 0 && (
+                                <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                  <span className="text-[10px] text-slate-500 font-medium">Контрольные поинты:</span>
+                                  {item.points_evaluated.map((pt, pIdx) => (
+                                    <span key={pIdx} className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700/80">
+                                      {pt}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Findings text */}
+                              {item.findings && (
+                                <div className="text-xs text-slate-300 leading-relaxed bg-slate-950/40 p-3 rounded-xl border border-slate-800/80">
+                                  <span className="font-semibold text-slate-200">📌 Выяснено из встреч: </span>
+                                  <span>{item.findings}</span>
+                                </div>
+                              )}
+
+                              {/* Risk Description */}
+                              {item.risk_description && (
+                                <div className="text-xs text-rose-300/90 leading-relaxed bg-rose-950/20 p-3 rounded-xl border border-rose-900/30">
+                                  <span className="font-semibold text-rose-300">⚠️ Риск при отсутствии решения: </span>
+                                  <span>{item.risk_description}</span>
+                                </div>
+                              )}
+
+                              {/* Recommendation or Question Callout */}
+                              {item.recommendation_or_question && (
+                                <div className="bg-indigo-950/25 p-3 rounded-xl border border-indigo-900/40 flex items-start justify-between gap-3">
+                                  <div className="space-y-1 text-xs">
+                                    <span className="font-bold text-indigo-300">💡 Рекомендация аналитика / Вопрос клиенту:</span>
+                                    <p className="text-white italic">«{item.recommendation_or_question}»</p>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(item.recommendation_or_question);
+                                      showToast("Вопрос скопирован в буфер обмена!");
+                                    }}
+                                    className="text-[11px] px-2 py-1 rounded bg-indigo-900/50 hover:bg-indigo-800 text-indigo-200 border border-indigo-700/50 shrink-0 transition"
+                                  >
+                                    📋 Копировать
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: INCONSISTENCIES */}
+                {analysisActiveTab === 'inconsistencies' && (
+                  <div className="space-y-4">
+                    <div className="text-xs text-slate-400">
+                      Выявленные расхождения между сметой, созвонами и позициями Заказчика. Каждое противоречие содержит готовый вопрос для утверждения.
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {analysisReport.inconsistencies?.map((inc, idx) => (
+                        <div key={idx} className="bg-slate-900 rounded-2xl p-5 border border-rose-900/40 space-y-3.5 shadow-lg">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="space-y-1">
+                              {inc.block_number && (
+                                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 mr-2">
+                                  Блок {inc.block_number}
+                                </span>
+                              )}
+                              {inc.impact_area && (
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                  {inc.impact_area}
+                                </span>
+                              )}
+                              <h4 className="font-bold text-rose-300 text-sm pt-1">{inc.topic}</h4>
+                            </div>
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 uppercase font-mono shrink-0">
+                              {inc.severity === 'critical' ? '🔴 critical' : inc.severity || 'high'}
+                            </span>
+                          </div>
+
+                          {/* Side-by-side sources */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                            <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800/80 space-y-1">
+                              <span className="font-semibold text-slate-400">🏛️ Источник А:</span>
+                              <p className="text-slate-300">{inc.source_a}</p>
+                            </div>
+                            <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800/80 space-y-1">
+                              <span className="font-semibold text-slate-400">🗣️ Источник Б:</span>
+                              <p className="text-slate-300">{inc.source_b}</p>
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-slate-300 leading-relaxed">{inc.conflict_explanation}</p>
+                          
+                          <div className="bg-indigo-950/30 rounded-xl p-3 border border-indigo-900/50 space-y-1">
+                            <div className="text-[11px] text-indigo-300 font-medium">Сформулированный вопрос Заказчику:</div>
+                            <div className="text-xs font-medium text-white italic">«{inc.clarifying_question}»</div>
+                          </div>
+
+                          <div className="flex justify-end">
+                            <button 
+                              onClick={() => {
+                                navigator.clipboard.writeText(inc.clarifying_question);
+                                showToast("Вопрос скопирован в буфер обмена!");
+                              }}
+                              className="text-xs px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded-lg transition flex items-center gap-1.5"
+                            >
+                              📋 Скопировать вопрос
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: CONFIRMED REQUIREMENTS */}
+                {analysisActiveTab === 'requirements' && (
+                  <div className="space-y-4">
+                    <div className="text-xs text-slate-400">
+                      Технические и функциональные требования, однозначно зафиксированные в ходе переговоров.
+                    </div>
+                    <div className="space-y-2.5">
+                      {analysisReport.confirmed_requirements?.map((req, idx) => (
+                        <div key={idx} className="bg-slate-900/70 rounded-xl p-3.5 border border-slate-800 flex items-center justify-between gap-4 hover:border-slate-700 transition">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              {req.id || `REQ-${idx + 1}`}
+                            </span>
+                            {req.category && (
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                {req.category}
+                              </span>
+                            )}
+                            <span className="text-sm text-slate-200">{req.text}</span>
+                          </div>
+                          <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shrink-0">
+                            {req.source || "Созвон"}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-300 leading-relaxed">{inc.conflict_explanation}</p>
-                        
-                        <div className="bg-black/40 rounded-xl p-3 border border-slate-800 space-y-1">
-                          <div className="text-[11px] text-slate-500 font-medium">Сформулированный вопрос клиенту:</div>
-                          <div className="text-xs font-medium text-white italic">«{inc.clarifying_question}»</div>
-                        </div>
-
-                        <div className="flex justify-end">
-                          <button 
-                            onClick={() => {
-                              navigator.clipboard.writeText(inc.clarifying_question);
-                              showToast("Вопрос скопирован в буфер обмена!");
-                            }}
-                            className="text-xs text-slate-400 hover:text-white transition flex items-center gap-1"
-                          >
-                            📋 Скопировать вопрос
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Confirmed Requirements */}
-                <div className="space-y-4 pt-4">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
-                    Согласованные технические требования ({analysisReport.confirmed_requirements?.length || 0})
-                  </h3>
-                  <div className="space-y-2">
-                    {analysisReport.confirmed_requirements?.map((req, idx) => (
-                      <div key={idx} className="bg-slate-900/60 rounded-xl p-3 border border-slate-800 flex items-center justify-between">
-                        <span className="text-sm text-slate-200">{req.text}</span>
-                        <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          {req.source || "Созвон"}
-                        </span>
-                      </div>
-                    ))}
+                {/* TAB 4: GAPS & MISSING TOPICS */}
+                {analysisActiveTab === 'gaps' && (
+                  <div className="space-y-4">
+                    <div className="text-xs text-slate-400">
+                      Разделы чек-листа и онтологии Xpage, по которым на встречах не было принято конкретных технических решений.
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {analysisReport.missing_critical_topics?.map((topic, idx) => (
+                        <div key={idx} className="bg-amber-950/15 rounded-xl p-4 border border-amber-900/40 flex items-start gap-3">
+                          <span className="text-base text-amber-400">⚠️</span>
+                          <div className="space-y-1">
+                            <div className="text-xs font-semibold text-amber-300">Белое пятно #{idx + 1}</div>
+                            <div className="text-xs text-slate-200">{topic}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ) : (
               <div className="border-2 border-dashed border-slate-800 rounded-2xl p-16 text-center space-y-4">
@@ -807,14 +1163,12 @@ function App() {
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold text-white">Расшифровки встреч готовы к анализу</h3>
-                  <p className="text-sm text-slate-400 max-w-md mx-auto mt-1">Нажмите «Запустить кросс-анализ», чтобы нейросеть сопоставила созвоны со сметой и выявила разногласия.</p>
+                  <p className="text-sm text-slate-400 max-w-md mx-auto mt-1">Нажмите «Запустить кросс-анализ», чтобы нейросеть сопоставила созвоны со сметой по 20 блокам чек-листа с рисками.</p>
                 </div>
               </div>
             )}
           </div>
-        )}
-
-        {/* STEP 3: FIGJAM */}
+        )}\n\n        {/* STEP 3: FIGJAM */}
         {currentStep === 3 && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
