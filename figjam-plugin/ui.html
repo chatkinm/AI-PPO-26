@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Xpage ППО Sync</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { background: #0f172a; color: #f8fafc; padding: 16px; font-size: 13px; line-height: 1.5; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #334155; }
+    .logo-badge { background: #4f46e5; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: 0.5px; }
+    .title { font-size: 14px; font-weight: 700; color: #ffffff; }
+    .status-badge { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; margin-bottom: 14px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; }
+    .dot.offline { background: #ef4444; }
+    .field { margin-bottom: 14px; }
+    label { display: block; font-size: 11px; font-weight: 600; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    select { width: 100%; background: #1e293b; color: white; border: 1px solid #475569; padding: 8px 10px; border-radius: 6px; font-size: 12px; outline: none; }
+    select:focus { border-color: #6366f1; }
+    .stats-card { background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; }
+    .stat-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; color: #cbd5e1; }
+    .stat-val { font-weight: 600; color: #818cf8; }
+    .btn { width: 100%; background: #4f46e5; color: white; border: none; padding: 10px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; }
+    .btn:hover { background: #4338ca; }
+    .btn:disabled { background: #475569; cursor: not-allowed; opacity: 0.6; }
+    .footer-note { font-size: 11px; color: #64748b; text-align: center; margin-top: 12px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">Xpage ППО Sync</div>
+    <div class="logo-badge">FIGJAM</div>
+  </div>
+
+  <div class="status-badge" id="statusBadge">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Проверка подключения к сервису...</span>
+  </div>
+
+  <div class="field">
+    <label>Выберите проект ППО</label>
+    <select id="projectSelect" disabled>
+      <option value="">Загрузка проектов...</option>
+    </select>
+  </div>
+
+  <div class="stats-card" id="statsCard" style="display: none;">
+    <div class="stat-row">
+      <span>Модулей системы:</span>
+      <span class="stat-val" id="modCount">0</span>
+    </div>
+    <div class="stat-row">
+      <span>Экранов интерфейса:</span>
+      <span class="stat-val" id="scrCount">0</span>
+    </div>
+  </div>
+
+  <button class="btn" id="drawBtn" disabled>
+    <span>⚡ Нарисовать на холсте FigJam</span>
+  </button>
+
+  <div class="footer-note">
+    Автоматическое построение: проект ⟶ модули ⟶ экраны ⟶ элементы со связями. 100% программно.
+  </div>
+
+  <script>
+    const CANDIDATE_URLS = ['http://localhost:8080', 'http://127.0.0.1:8080'];
+    let activeBackendUrl = CANDIDATE_URLS[0];
+    let projectsData = [];
+    let isConnected = false;
+
+    function renderProjects(list, backendUrl) {
+      if (isConnected) return;
+      isConnected = true;
+      if (backendUrl) activeBackendUrl = backendUrl;
+      projectsData = list;
+      
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      const select = document.getElementById('projectSelect');
+      const btn = document.getElementById('drawBtn');
+
+      dot.className = 'dot';
+      text.innerText = 'Сервис ППО подключен (' + activeBackendUrl.replace('http://', '') + ')';
+      text.style.cursor = 'default';
+      text.onclick = null;
+      
+      select.innerHTML = '';
+      const structured = projectsData.filter(p => p.has_structure);
+      
+      if (structured.length === 0) {
+        select.innerHTML = '<option value="">Нет проектов со структурой</option>';
+        select.disabled = true;
+        btn.disabled = true;
+        return;
+      }
+
+      structured.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.innerText = p.name + ' (' + p.screens_count + ' экр.)';
+        select.appendChild(opt);
+      });
+
+      select.disabled = false;
+      btn.disabled = false;
+      updateStats();
+    }
+
+    async function checkBackend() {
+      if (isConnected) return;
+
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      text.innerText = 'Подключение к сервису...';
+
+      // 1. Посылаем запрос в code.js
+      parent.postMessage({ pluginMessage: { type: 'FETCH_PROJECTS' } }, '*');
+
+      // 2. Пробуем адреса по очереди в UI
+      for (const url of CANDIDATE_URLS) {
+        try {
+          const resp = await fetch(url + '/api/figjam/projects', { mode: 'cors' });
+          if (resp.ok) {
+            const data = await resp.json();
+            renderProjects(data, url);
+            return;
+          }
+        } catch (e) {
+          // пробуем следующий
+        }
+      }
+
+      if (!isConnected) {
+        dot.className = 'dot offline';
+        text.innerText = 'Сервер не отвечает (нажмите для повтора)';
+        text.style.cursor = 'pointer';
+        text.onclick = checkBackend;
+      }
+    }
+
+    function updateStats() {
+      const select = document.getElementById('projectSelect');
+      const statsCard = document.getElementById('statsCard');
+      const modCount = document.getElementById('modCount');
+      const scrCount = document.getElementById('scrCount');
+      
+      const p = projectsData.find(x => x.id === select.value);
+      if (p) {
+        statsCard.style.display = 'block';
+        modCount.innerText = p.modules_count;
+        scrCount.innerText = p.screens_count;
+      } else {
+        statsCard.style.display = 'none';
+      }
+    }
+
+    document.getElementById('projectSelect').addEventListener('change', updateStats);
+
+    document.getElementById('drawBtn').addEventListener('click', async () => {
+      const select = document.getElementById('projectSelect');
+      const btn = document.getElementById('drawBtn');
+      const projectId = select.value;
+      if (!projectId) return;
+
+      btn.disabled = true;
+      btn.innerText = '⏳ Загрузка и расчет связей...';
+
+      try {
+        // Загружаем данные холста напрямую в UI
+        const resp = await fetch(activeBackendUrl + '/api/figjam/nodes/' + projectId);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const payload = await resp.json();
+
+        btn.innerText = '🎨 Отрисовка на холсте FigJam...';
+        // Передаем готовые координаты в code.js для вызова Figma API
+        parent.postMessage({ pluginMessage: { type: 'DRAW_STRUCTURE', payload: payload } }, '*');
+      } catch (err) {
+        // Фоллбек: передаем команду в code.js
+        parent.postMessage({ pluginMessage: { type: 'FETCH_AND_DRAW', projectId: projectId } }, '*');
+      }
+    });
+
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      if (msg.type === 'PROJECTS_LOADED') {
+        renderProjects(msg.projects, 'http://localhost:8080');
+      } else if (msg.type === 'DRAW_DONE') {
+        const btn = document.getElementById('drawBtn');
+        btn.innerText = '✅ Готово! Нарисовано';
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.innerText = '⚡ Нарисовать на холсте FigJam';
+        }, 2500);
+      } else if (msg.type === 'DRAW_ERROR') {
+        const btn = document.getElementById('drawBtn');
+        btn.disabled = false;
+        btn.innerText = '⚡ Нарисовать на холсте FigJam';
+        alert('Ошибка отрисовки: ' + (msg.error || 'Неизвестная ошибка'));
+      }
+    };
+
+    // Запуск проверки
+    checkBackend();
+    const timer = setInterval(() => {
+      if (isConnected) {
+        clearInterval(timer);
+      } else {
+        checkBackend();
+      }
+    }, 2000);
+  </script>
+</body>
+</html>
